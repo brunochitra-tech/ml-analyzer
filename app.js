@@ -1275,9 +1275,11 @@ $('#btnFbConnect').onclick = ()=>{
   const raw=($('#fbConfigInput').value||'').trim();
   if(!raw){ toast('Pegá la configuración de Firebase primero','error'); return; }
   try{
-    const cfg=JSON.parse(raw);
+    let cfg;
+    try { cfg = JSON.parse(raw); } 
+    catch(err) { cfg = new Function('return ' + raw)(); }
     if(initFirebase(cfg)) toast('Conectando a Firebase...','');
-  }catch(e){ toast('JSON inválido: '+e.message,'error'); }
+  }catch(e){ toast('Configuración inválida: '+e.message,'error'); }
 };
 
 $('#btnFbDisconnect').onclick = ()=>{
@@ -1292,13 +1294,21 @@ loadPriceListFromStorage();  // carga rápida desde localStorage mientras Fireba
 renderHistory();
 setFbStatus('none');
 
-// Auto-conectar Firebase si hay config guardada
-const savedFbCfg = localStorage.getItem(LS_FB);
-if(savedFbCfg){
-  try{
-    const cfg = JSON.parse(savedFbCfg);
-    const textarea = $('#fbConfigInput');
-    if(textarea) textarea.value = JSON.stringify(cfg, null, 2);
-    initFirebase(cfg);
-  }catch(e){ console.error('Error cargando config Firebase:', e); }
+// Configuración fija de Firebase (Auto-conexión para todos)
+const HARDCODED_FB_CFG = {
+  apiKey: "AIzaSyCINoebeHHi_pLkihX1A1NIz09CzICLR7A",
+  authDomain: "ml-analyzer-4e633.firebaseapp.com",
+  databaseURL: "https://ml-analyzer-4e633-default-rtdb.firebaseio.com",
+  projectId: "ml-analyzer-4e633",
+  storageBucket: "ml-analyzer-4e633.firebasestorage.app",
+  messagingSenderId: "800257701972",
+  appId: "1:800257701972:web:73e3827622dd6bd15fd5c1"
+};
+
+try {
+  const textarea = $('#fbConfigInput');
+  if(textarea) textarea.value = JSON.stringify(HARDCODED_FB_CFG, null, 2);
+  initFirebase(HARDCODED_FB_CFG);
+} catch(e) {
+  console.error('Error auto-conectando Firebase:', e);
 }
