@@ -1485,7 +1485,7 @@ $('#btnLoginSubmit').onclick = async ()=>{
     err.style.display='none';
     await _auth.signInWithEmailAndPassword(email, pass);
   } catch(e) {
-    err.textContent = 'Credenciales inválidas. Verifica tu correo y contraseña.';
+    err.textContent = 'Error: ' + e.code + ' - ' + e.message;
     err.style.display = 'block';
     $('#btnLoginSubmit').disabled = false;
   }
