@@ -1500,13 +1500,14 @@ setFbStatus('none');
 
 // Configuración fija de Firebase (Auto-conexión para todos)
 const HARDCODED_FB_CFG = {
-  apiKey: "AIzaSyCINoebeHHi_pLkihX1A1NIz09CzICLR7A",
+  apiKey: "AIzaSyCINoebEHhI_pLkihX1A1NIz09CzICLR7A",
   authDomain: "ml-analyzer-4e633.firebaseapp.com",
   databaseURL: "https://ml-analyzer-4e633-default-rtdb.firebaseio.com",
   projectId: "ml-analyzer-4e633",
   storageBucket: "ml-analyzer-4e633.firebasestorage.app",
   messagingSenderId: "800257701972",
-  appId: "1:800257701972:web:73e3827622dd6bd15fd5c1"
+  appId: "1:800257701972:web:73e3827622dd6bd15fd5c1",
+  measurementId: "G-YN1YW28ZRC"
 };
 
 try {
