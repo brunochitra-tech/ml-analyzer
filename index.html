@@ -10,10 +10,30 @@
 </head>
 <body>
 
+<!-- ================ LOGIN OVERLAY ================ -->
+<div id="loginOverlay" class="login-overlay">
+  <div class="login-box">
+    <h1 style="margin-bottom:8px">🔐 Acceso Seguro</h1>
+    <div style="color:var(--muted);font-size:14px;margin-bottom:20px;line-height:1.4">Ingresa con tu cuenta de Firebase para acceder a los datos.</div>
+    <div style="margin-bottom:12px">
+      <input type="email" id="loginEmail" placeholder="Tu correo electrónico" style="width:100%;padding:10px" />
+    </div>
+    <div style="margin-bottom:20px">
+      <input type="password" id="loginPassword" placeholder="Contraseña" style="width:100%;padding:10px" />
+    </div>
+    <button class="btn primary" id="btnLoginSubmit" style="width:100%;padding:10px">Iniciar Sesión</button>
+    <div id="loginError" style="color:#ef4b5c;font-size:13px;margin-top:12px;display:none"></div>
+  </div>
+</div>
+
 <header>
   <div>
     <h1>📊 ML Analyzer</h1>
     <div class="sub">Análisis de ventas Mercado Libre · Control de precios · Rentabilidad</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span id="currentUserLabel" style="color:var(--muted);font-size:13px"></span>
+    <button class="btn" id="btnLogout" style="display:none;padding:4px 10px;font-size:13px">Cerrar sesión</button>
   </div>
   <nav class="nav" id="tabsNav">
     <button data-tab="dashboard" class="active">Dashboard</button>
@@ -23,6 +43,7 @@
     <button data-tab="zonas">Zonas / Envíos</button>
     <button data-tab="excepciones">Excepciones</button>
     <button data-tab="auditoria">Auditoría</button>
+    <button data-tab="calidad">⚠️ Calidad / Devoluciones</button>
     <button data-tab="config">Configuración</button>
   </nav>
 </header>
@@ -41,6 +62,7 @@
           📋 Cargar lista de precios
           <input type="file" id="filePrices" accept=".xlsx,.xls"/>
         </div>
+        <button class="btn primary" id="btnSaveToCloud" style="background:#2fbf71;border-color:#2fbf71">💾 Guardar en historial</button>
         <button class="btn" id="btnClearReport">🗑 Limpiar reporte</button>
         <span id="statusBox" class="chip">Sin datos</span>
         <span id="priceListInfo" class="chip">Sin lista de precios</span>
@@ -453,6 +475,47 @@
     </section>
   </div>
 
+  <!-- ================ CALIDAD Y DEVOLUCIONES ================ -->
+  <div class="tab" id="tab-calidad">
+    <section class="row" id="calidadKpis"></section>
+    
+    <section class="grid-2" style="margin-top:14px">
+      <div class="card">
+        <h2>Distribución de estados (Ventas fallidas)</h2>
+        <div class="chart-box"><canvas id="chartCalidadEstados"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Ranking: SKUs con más fallos</h2>
+        <div class="tbl-wrap" style="max-height:280px">
+          <table id="tblCalidadRank">
+            <thead><tr><th>SKU</th><th class="num">Fallos</th><th class="num">Unidades vendidas</th><th class="num">Tasa de Fallo</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:14px">
+      <div class="flex-between">
+        <h2>Detalle de filas canceladas / devueltas</h2>
+        <button class="btn" id="btnExportCalidad">⬇ Exportar CSV</button>
+      </div>
+      <div class="tbl-wrap">
+        <table id="tblCalidadDetail">
+          <thead><tr>
+            <th>Fecha</th>
+            <th># Venta</th>
+            <th>Estado exacto (ML)</th>
+            <th>SKU</th>
+            <th class="num">Unidades</th>
+            <th class="num">Facturación perdida</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
   <!-- ================ CONFIG ================ -->
   <div class="tab" id="tab-config">
 
@@ -515,15 +578,12 @@
     </section>
 
     <section class="card" style="margin-top:14px">
-      <h2>Historial de reportes cargados</h2>
+      <h2>☁️ Historial de reportes guardados en la nube</h2>
       <div class="tbl-wrap" style="max-height:300px">
         <table id="tblHistory">
-          <thead><tr><th>Fecha carga</th><th>Archivo</th><th>Período</th><th class="num">Filas</th><th class="num">Neto total</th></tr></thead>
+          <thead><tr><th>Fecha guardado</th><th>Archivo Original</th><th>Período de ventas</th><th class="num">Filas</th><th class="num">Neto total</th><th>Acciones</th></tr></thead>
           <tbody></tbody>
         </table>
-      </div>
-      <div class="controls" style="margin-top:10px">
-        <button class="btn danger" id="btnClearHistory">🗑 Borrar historial</button>
       </div>
     </section>
 
@@ -545,6 +605,7 @@
 
 <!-- Firebase SDK (compat v9) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="app.js"></script>
 </body>

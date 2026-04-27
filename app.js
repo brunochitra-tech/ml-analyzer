@@ -110,7 +110,8 @@ function loadCfg(){
 // =====================================================================
 
 let _db = null;
-const fbConnected = () => _db !== null;
+let _auth = null;
+const fbConnected = () => _db !== null && _auth && _auth.currentUser;
 
 // Campos derivados de enrichSales() y normalizeSku: no se almacenan en Firebase
 const DERIVED_FIELDS = new Set([
@@ -121,7 +122,6 @@ const DERIVED_FIELDS = new Set([
 function initFirebase(config){
   try{
     if(!config.databaseURL){ toast('Faltá el campo databaseURL en la configuración','error'); return false; }
-    // Si ya hay una app inicializada, la eliminamos primero
     if(firebase.apps && firebase.apps.length>0){
       firebase.apps[0].delete().then(()=>_startFirebase(config)).catch(e=>console.error(e));
     } else {
@@ -139,13 +139,27 @@ function initFirebase(config){
 function _startFirebase(config){
   firebase.initializeApp(config);
   _db = firebase.database();
+  _auth = firebase.auth();
   localStorage.setItem(LS_FB, JSON.stringify(config));
-  setFbStatus('connecting');
-  // Monitor de conexión real
-  _db.ref('.info/connected').on('value', snap=>{
-    setFbStatus(snap.val()?'ok':'error');
+  
+  _auth.onAuthStateChanged(user => {
+    if(user) {
+      $('#loginOverlay').style.display = 'none';
+      $('#currentUserLabel').textContent = user.email;
+      $('#btnLogout').style.display = 'block';
+      setFbStatus('connecting');
+      _db.ref('.info/connected').on('value', snap=>{
+        setFbStatus(snap.val()?'ok':'error');
+      });
+      _setupListeners();
+      _setupHistoryListener();
+    } else {
+      $('#loginOverlay').style.display = 'flex';
+      $('#currentUserLabel').textContent = '';
+      $('#btnLogout').style.display = 'none';
+      setFbStatus('none');
+    }
   });
-  _setupListeners();
 }
 
 function setFbStatus(s){
@@ -655,6 +669,7 @@ function refreshAll(){
   renderZonasTab();
   renderExcepcionesTab();
   renderAuditoriaTab();
+  renderCalidadTab();
   renderHistory();
 }
 
@@ -1138,6 +1153,100 @@ function matchBadge(k){
   }
 }
 
+// ---------- CALIDAD Y DEVOLUCIONES ----------
+let calidadData = [];
+
+function renderCalidadTab(){
+  const rows = getCalidadFiltered();
+  const cancelledRows = rows.filter(r => r._cancelada);
+  
+  const totalCancel = cancelledRows.length;
+  const udsCancel = cancelledRows.reduce((a,r)=>a+(r._unidades||0),0);
+  const factPerdida = cancelledRows.reduce((a,r)=>a+(r._ing_prod||r._precio_unit*(r._unidades||1)||0), 0);
+  
+  const udsTotales = rows.reduce((a,r)=>a+(r._unidades||0), 0);
+  const tasaFalloGral = safeDiv(udsCancel, udsTotales);
+
+  $('#calidadKpis').innerHTML=[
+    kpi('Ventas Fallidas (Filas)',fmtInt(totalCancel)),
+    kpi('Unidades Fallidas',fmtInt(udsCancel)),
+    kpi('Facturación Bruta Perdida',fmtMoney(factPerdida)),
+    kpi('Tasa de Fallo General',fmtPct(tasaFalloGral), 'Unidades fallidas / Totales')
+  ].join('');
+
+  // Grafico Estados
+  const byEstado = groupSum(cancelledRows, r=>r.estado_venta||'Sin estado', r=>1);
+  drawChart('chartCalidadEstados','doughnut',{
+    labels:[...byEstado.keys()],
+    datasets:[{data:[...byEstado.values()],backgroundColor:['#ef4b5c','#f4b23b','#7c5cff','#4c9aff','#8a94ab']}]
+  });
+
+  // Ranking SKU
+  const skuMap = new Map();
+  rows.forEach(r => {
+    const k = r._sku_padre || r._sku_raw || '(Sin SKU)';
+    let g = skuMap.get(k);
+    if(!g) { g = {sku:k, fallos:0, uds_vendidas:0, fact_perdida:0}; skuMap.set(k,g); }
+    g.uds_vendidas += (r._unidades||0);
+    if(r._cancelada) {
+      g.fallos += (r._unidades||0);
+      g.fact_perdida += (r._ing_prod||r._precio_unit*(r._unidades||1)||0);
+    }
+  });
+
+  const skuList = [...skuMap.values()].filter(s => s.fallos > 0);
+  skuList.forEach(s => s.tasa = safeDiv(s.fallos, s.uds_vendidas));
+  skuList.sort((a,b) => b.fallos - a.fallos);
+
+  $('#tblCalidadRank tbody').innerHTML = skuList.map(s => `<tr>
+    <td><b>${escapeHtml(s.sku)}</b></td>
+    <td class="num">${fmtInt(s.fallos)}</td>
+    <td class="num">${fmtInt(s.uds_vendidas)}</td>
+    <td class="num">${fmtPct(s.tasa)}</td>
+  </tr>`).join('') || `<tr><td colspan="4" class="empty">No hay fallos</td></tr>`;
+
+  // Detalle
+  calidadData = cancelledRows.sort((a,b) => (b._fecha?b._fecha.getTime():0) - (a._fecha?a._fecha.getTime():0));
+  $('#tblCalidadDetail tbody').innerHTML = calidadData.slice(0,500).map(r => {
+    const fact = r._ing_prod || r._precio_unit*(r._unidades||1) || 0;
+    return `<tr>
+      <td>${fmtDate(r._fecha)}</td>
+      <td>${escapeHtml(r.num_venta||'')}</td>
+      <td><span class="badge bad">${escapeHtml(r.estado_venta||'')}</span></td>
+      <td>${escapeHtml(r._sku_raw||'')}</td>
+      <td class="num">${fmtInt(r._unidades)}</td>
+      <td class="num">${fmtMoney(fact)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" class="empty">No hay devoluciones ni cancelaciones</td></tr>`;
+}
+
+function getCalidadFiltered(){
+  if(!state.sales) return [];
+  const from = $('#fDateFrom').value ? new Date($('#fDateFrom').value) : null;
+  const to   = $('#fDateTo').value   ? new Date($('#fDateTo').value+'T23:59:59') : null;
+  const skuPadre = $('#fSkuPadre').value.trim().toUpperCase();
+  const skuOrig  = $('#fSkuOriginal').value.trim().toUpperCase();
+  const pub      = $('#fPublicacion').value.trim();
+  const modalidad= $('#fModalidad').value;
+  const prov     = $('#fProvincia').value;
+  const ciudad   = $('#fCiudad').value.trim().toLowerCase();
+  const publi    = $('#fPublicidad').value;
+  // Omitimos fEstado para que no afecte la vista de cancelaciones
+  return state.sales.rows.filter(r=>{
+    if(from && (!r._fecha||r._fecha<from)) return false;
+    if(to   && (!r._fecha||r._fecha>to))   return false;
+    if(skuPadre && (r._sku_padre||'').toUpperCase()!==skuPadre) return false;
+    if(skuOrig  && (r._sku_raw||'').toUpperCase().indexOf(skuOrig)<0) return false;
+    if(pub      && String(r.publicacion||'').indexOf(pub)<0) return false;
+    if(modalidad && (r.forma_entrega||'')!==modalidad) return false;
+    if(prov     && (r.provincia||'')!==prov) return false;
+    if(ciudad   && String(r.ciudad||'').toLowerCase().indexOf(ciudad)<0) return false;
+    if(publi==='si' && !r._publicidad) return false;
+    if(publi==='no' &&  r._publicidad) return false;
+    return true;
+  });
+}
+
 // ---------- SORT ----------
 function bindSortable(selector,sortState,rerender){
   const ths=$$(selector+' thead th[data-k]');
@@ -1149,11 +1258,77 @@ function sortData(arr,s){
   return arr.sort((a,b)=>{ let va=a[k],vb=b[k]; if(typeof va==='string'||typeof vb==='string'){va=String(va||'').toLowerCase();vb=String(vb||'').toLowerCase();if(va<vb)return -1*d;if(va>vb)return 1*d;return 0;} va=va==null?-Infinity:va;vb=vb==null?-Infinity:vb;return(va-vb)*d; });
 }
 
-// ---------- HISTORIAL ----------
-function renderHistory(){
-  const h=loadHistory();
-  $('#tblHistory tbody').innerHTML=h.map(x=>`<tr><td>${new Date(x.loadedAt).toLocaleString('es-AR')}</td><td>${escapeHtml(x.fileName)}</td><td>${escapeHtml(x.period)}</td><td class="num">${fmtInt(x.rows)}</td><td class="num">${fmtMoney(x.neto)}</td></tr>`).join('')||`<tr><td colspan="5" class="empty">Sin historial</td></tr>`;
+// ---------- HISTORIAL EN LA NUBE ----------
+let cloudHistory = [];
+function _setupHistoryListener(){
+  if(!_db) return;
+  _db.ref('mlanalyzer/history').on('value', snap=>{
+    const val = snap.val() || {};
+    cloudHistory = Object.keys(val).map(k => ({id:k, ...val[k]})).sort((a,b)=>b.loadedAt - a.loadedAt);
+    renderHistory();
+  });
 }
+
+function renderHistory(){
+  $('#tblHistory tbody').innerHTML = cloudHistory.map(x => `<tr>
+    <td>${new Date(x.loadedAt).toLocaleString('es-AR')}</td>
+    <td>${escapeHtml(x.fileName||'')}</td>
+    <td>${escapeHtml(x.period||'')}</td>
+    <td class="num">${fmtInt(x.rows)}</td>
+    <td class="num">${fmtMoney(x.neto)}</td>
+    <td>
+      <button class="btn primary" style="padding:4px 8px;font-size:12px" onclick="loadCloudReport('${x.id}')">Cargar</button>
+      <button class="btn danger" style="padding:4px 8px;font-size:12px;margin-left:4px" onclick="deleteCloudReport('${x.id}')">Borrar</button>
+    </td>
+  </tr>`).join('') || `<tr><td colspan="6" class="empty">Sin historial guardado en la nube</td></tr>`;
+}
+
+window.loadCloudReport = async (id) => {
+  if(!_db) return;
+  toast('Cargando reporte de la nube...','');
+  try {
+    const snap = await _db.ref(`mlanalyzer/history/${id}`).once('value');
+    const data = snap.val();
+    if(!data){ toast('Reporte no encontrado','error'); return; }
+    await _db.ref('mlanalyzer/sales').set({ rows: data.rows, meta: data.meta });
+    toast('Reporte cargado con éxito','ok');
+  } catch(e) {
+    toast('Error cargando reporte: '+e.message, 'error');
+  }
+};
+
+window.deleteCloudReport = async (id) => {
+  if(!_db || !confirm('¿Eliminar este reporte permanentemente de la nube?')) return;
+  await _db.ref(`mlanalyzer/history/${id}`).remove();
+  toast('Reporte eliminado de la nube','ok');
+};
+
+$('#btnSaveToCloud').onclick = async ()=>{
+  if(!_db || !state.sales){ toast('No hay reporte activo para guardar','error'); return; }
+  const s = state.sales;
+  const ser = s.rows.map(_serializeRow);
+  const rowsStr = JSON.stringify(ser);
+  const metaStr = JSON.stringify(s.meta);
+  const p = s.meta.period;
+  const periodStr = p ? `${fmtDate(p.from)} → ${fmtDate(p.to)}` : 'Sin periodo';
+  const neto = s.rows.reduce((a,r)=>a+(r._total||0), 0);
+  
+  const id = 'rep_' + Date.now();
+  toast('Guardando en la nube (puede tardar unos segundos)...','');
+  try {
+    await _db.ref(`mlanalyzer/history/${id}`).set({
+      loadedAt: Date.now(),
+      fileName: s.meta.fileName || 'Reporte',
+      period: periodStr,
+      rows: rowsStr,
+      meta: metaStr,
+      neto: neto
+    });
+    toast('Reporte guardado en el historial','ok');
+  } catch(e) {
+    toast('Error guardando historial: '+e.message, 'error');
+  }
+};
 
 // ---------- EXPORTACIONES ----------
 function exportCSV(filename,rows,columns){
@@ -1187,7 +1362,8 @@ $('#btnClearReport').onclick = ()=>{
   $('#filtersBlock').style.display='none';
   Object.values(state.charts).forEach(c=>c.destroy()); state.charts={};
   $('#kpisRow').innerHTML='<div class="empty">Cargá un reporte para ver el dashboard.</div>';
-  ['tblSku','tblPrecios','tblLogistica','tblProv','tblCity','tblAudit'].forEach(id=>{ const tb=document.querySelector('#'+id+' tbody'); if(tb) tb.innerHTML=''; });
+  if($('#calidadKpis')) $('#calidadKpis').innerHTML='';
+  ['tblSku','tblPrecios','tblLogistica','tblProv','tblCity','tblAudit','tblCalidadRank','tblCalidadDetail'].forEach(id=>{ const tb=document.querySelector('#'+id+' tbody'); if(tb) tb.innerHTML=''; });
   renderStatus();
   toast('Reporte limpiado','ok');
   if(fbConnected()) fbClear_sales();
@@ -1202,10 +1378,7 @@ $('#btnClearPriceList').onclick = ()=>{
   if(fbConnected()) fbClear_priceList();
 };
 
-$('#btnClearHistory').onclick = ()=>{
-  if(!confirm('¿Borrar historial?')) return;
-  localStorage.removeItem(LS_HIST); renderHistory(); toast('Historial borrado','ok');
-};
+
 
 $('#thresholdPct').addEventListener('change', e=>{ state.thresholdPct=parseFloat(e.target.value)||0; saveCfg(); if(state.sales) refreshAll(); });
 $('#btnApplyFilters').onclick = ()=>{ if(state.sales) refreshAll(); };
@@ -1270,6 +1443,19 @@ $('#btnExportPriceList').onclick = ()=>{
   exportCSV('lista_precios_expandida.csv',items,[{label:'SKU',get:r=>r.sku},{label:'SKU padre',get:r=>r.parent},{label:'Modelo',get:r=>r.modelo},{label:'Categoría',get:r=>r.cat},{label:'Precio neto',get:r=>r.precio},{label:'Válido',get:r=>r.val?'SI':'NO'}]);
 };
 
+$('#btnExportCalidad').onclick = ()=>{
+  if(!calidadData.length){ toast('No hay datos para exportar','error'); return; }
+  exportCSV('calidad_devoluciones.csv', calidadData, [
+    {label:'Fecha', get:r=>r._fecha?r._fecha.toISOString().slice(0,10):''},
+    {label:'# Venta', get:r=>r.num_venta},
+    {label:'Estado exacto', get:r=>r.estado_venta},
+    {label:'SKU Original', get:r=>r._sku_raw},
+    {label:'SKU Padre', get:r=>r._sku_padre},
+    {label:'Unidades', get:r=>r._unidades},
+    {label:'Facturación Perdida', get:r=>(r._ing_prod || r._precio_unit*(r._unidades||1) || 0)}
+  ]);
+};
+
 // ---------- FIREBASE BUTTONS ----------
 $('#btnFbConnect').onclick = ()=>{
   const raw=($('#fbConfigInput').value||'').trim();
@@ -1287,6 +1473,24 @@ $('#btnFbDisconnect').onclick = ()=>{
   localStorage.removeItem(LS_FB);
   toast('Configuración eliminada. Recargá la página para desconectar.','ok');
 };
+
+// ---------- AUTH EVENTOS ----------
+$('#btnLoginSubmit').onclick = async ()=>{
+  const email = $('#loginEmail').value.trim();
+  const pass = $('#loginPassword').value;
+  const err = $('#loginError');
+  if(!email || !pass){ err.textContent='Completá ambos campos'; err.style.display='block'; return; }
+  try {
+    $('#btnLoginSubmit').disabled = true;
+    err.style.display='none';
+    await _auth.signInWithEmailAndPassword(email, pass);
+  } catch(e) {
+    err.textContent = 'Credenciales inválidas. Verifica tu correo y contraseña.';
+    err.style.display = 'block';
+    $('#btnLoginSubmit').disabled = false;
+  }
+};
+$('#btnLogout').onclick = ()=>{ if(_auth) _auth.signOut(); };
 
 // ---------- INIT ----------
 loadCfg();
