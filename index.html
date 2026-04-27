@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ML Analyzer — Rentabilidad y Control de Precios</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📊 ML Analyzer</h1>
+    <div class="sub">Análisis de ventas Mercado Libre · Control de precios · Rentabilidad</div>
+  </div>
+  <nav class="nav" id="tabsNav">
+    <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="sku">SKU</button>
+    <button data-tab="precios">Control de precios</button>
+    <button data-tab="logistica">Logística</button>
+    <button data-tab="zonas">Zonas / Envíos</button>
+    <button data-tab="excepciones">Excepciones</button>
+    <button data-tab="auditoria">Auditoría</button>
+    <button data-tab="config">Configuración</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============ BARRA SUPERIOR DE CARGA Y FILTROS ============ -->
+  <section class="card" id="topBar">
+    <div class="flex-between">
+      <div class="controls">
+        <div class="file-input btn primary">
+          📤 Cargar reporte de ventas (XLSX)
+          <input type="file" id="fileSales" accept=".xlsx,.xls"/>
+        </div>
+        <div class="file-input btn">
+          📋 Cargar lista de precios
+          <input type="file" id="filePrices" accept=".xlsx,.xls"/>
+        </div>
+        <button class="btn" id="btnClearReport">🗑 Limpiar reporte</button>
+        <span id="statusBox" class="chip">Sin datos</span>
+        <span id="priceListInfo" class="chip">Sin lista de precios</span>
+      </div>
+      <div class="controls">
+        <label style="color:var(--muted);font-size:12px">Umbral cerca objetivo ± %</label>
+        <input type="number" id="thresholdPct" value="3" min="0" max="50" step="0.5" style="width:70px"/>
+      </div>
+    </div>
+
+    <details class="filter-block" id="filtersBlock" style="display:none">
+      <summary>🔍 Filtros globales</summary>
+      <div class="controls" style="margin-top:10px">
+        <label>Desde <input type="date" id="fDateFrom"/></label>
+        <label>Hasta <input type="date" id="fDateTo"/></label>
+        <input type="text" id="fSkuPadre" placeholder="SKU padre"/>
+        <input type="text" id="fSkuOriginal" placeholder="SKU original"/>
+        <input type="text" id="fPublicacion" placeholder="# Publicación"/>
+        <select id="fModalidad"><option value="">Modalidad (todas)</option></select>
+        <select id="fProvincia"><option value="">Provincia (todas)</option></select>
+        <input type="text" id="fCiudad" placeholder="Ciudad"/>
+        <select id="fPublicidad">
+          <option value="">Publicidad (todas)</option>
+          <option value="si">Con publicidad</option>
+          <option value="no">Sin publicidad</option>
+        </select>
+        <select id="fEstado"><option value="">Estado (todos)</option></select>
+        <button class="btn primary" id="btnApplyFilters">Aplicar</button>
+        <button class="btn" id="btnResetFilters">Limpiar</button>
+      </div>
+    </details>
+  </section>
+
+  <!-- ================ DASHBOARD ================ -->
+  <div class="tab active" id="tab-dashboard">
+    <section class="row" style="margin-top:14px" id="kpisRow"></section>
+
+    <section class="grid-2" style="margin-top:14px">
+      <div class="card">
+        <h2>Ingresos diarios (Total neto real)</h2>
+        <div class="chart-box"><canvas id="chartDaily"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Ventas por modalidad logística</h2>
+        <div class="chart-box"><canvas id="chartModalidad"></canvas></div>
+      </div>
+    </section>
+
+    <section class="grid-2" style="margin-top:14px">
+      <div class="card">
+        <h2>Top 10 SKU padre por neto</h2>
+        <div class="chart-box"><canvas id="chartTopSku"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Top 10 provincias por unidades</h2>
+        <div class="chart-box"><canvas id="chartTopProv"></canvas></div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:14px">
+      <div class="flex-between">
+        <h2>Resumen de cruce</h2>
+        <button class="btn" data-go-tab="auditoria">Ver auditoría completa →</button>
+      </div>
+      <div id="crossSummary" class="row"></div>
+    </section>
+  </div>
+
+  <!-- ================ SKU ================ -->
+  <div class="tab" id="tab-sku">
+    <section class="card">
+      <div class="flex-between">
+        <h2>Análisis por SKU padre</h2>
+        <div class="controls">
+          <input type="text" id="skuSearch" placeholder="Buscar SKU / modelo / categoría"/>
+          <button class="btn" id="btnExportSku">⬇ Exportar CSV</button>
+        </div>
+      </div>
+      <div class="tbl-wrap" style="margin-top:10px">
+        <table id="tblSku">
+          <thead><tr>
+            <th data-k="sku_padre">SKU padre</th>
+            <th data-k="modelo">Modelo</th>
+            <th data-k="categoria">Categoría</th>
+            <th data-k="variantes">Variantes</th>
+            <th data-k="ventas" class="num">Ventas</th>
+            <th data-k="unidades" class="num">Uds</th>
+            <th data-k="facturacion_bruta" class="num">Facturación bruta</th>
+            <th data-k="neto_total" class="num">Neto total</th>
+            <th data-k="neto_unit_prom" class="num">Neto unit. prom.</th>
+            <th data-k="precio_prom" class="num">Precio prom.</th>
+            <th data-k="precio_min" class="num">Precio mín.</th>
+            <th data-k="precio_max" class="num">Precio máx.</th>
+            <th data-k="pub_count" class="num">Con publi</th>
+            <th data-k="pub_pct" class="num">% publi</th>
+            <th data-k="modalidad_dom">Modalidad dom.</th>
+            <th data-k="provincia_dom">Provincia dom.</th>
+            <th data-k="precio_neto_obj" class="num">Neto objetivo</th>
+            <th data-k="dif_abs" class="num">Dif abs</th>
+            <th data-k="dif_pct" class="num">Dif %</th>
+            <th data-k="estado">Estado</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================ CONTROL DE PRECIOS ================ -->
+  <div class="tab" id="tab-precios">
+    <section class="row">
+      <div class="card kpi" id="kpiAbajo"></div>
+      <div class="card kpi" id="kpiCerca"></div>
+      <div class="card kpi" id="kpiArriba"></div>
+    </section>
+    <section class="grid-2" style="margin-top:14px">
+      <div class="card">
+        <h2>🔴 Ranking peor desvío (más bajo vs objetivo)</h2>
+        <div class="tbl-wrap" id="wrapPeor"></div>
+      </div>
+      <div class="card">
+        <h2>🟢 Ranking mejor desvío (más alto vs objetivo)</h2>
+        <div class="tbl-wrap" id="wrapMejor"></div>
+      </div>
+    </section>
+    <section class="card" style="margin-top:14px">
+      <div class="flex-between">
+        <h2>Semáforo completo</h2>
+        <button class="btn" id="btnExportPrecios">⬇ Exportar CSV</button>
+      </div>
+      <div class="tbl-wrap">
+        <table id="tblPrecios">
+          <thead><tr>
+            <th data-k="sku_padre">SKU padre</th>
+            <th data-k="modelo">Modelo</th>
+            <th data-k="neto_unit_prom" class="num">Neto unit. prom.</th>
+            <th data-k="precio_neto_obj" class="num">Neto objetivo</th>
+            <th data-k="dif_abs" class="num">Dif abs</th>
+            <th data-k="dif_pct" class="num">Dif %</th>
+            <th data-k="estado">Estado</th>
+            <th data-k="unidades" class="num">Unidades</th>
+            <th data-k="neto_total" class="num">Neto total</th>
+            <th data-k="_action">Detalle</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="hint">💡 Tocá <b>Ver detalle</b> en cualquier SKU o seleccionalo abajo para abrir el análisis económico y la comparativa por publicación MLA.</div>
+    </section>
+
+    <!-- ============ DETALLE POR SKU ============ -->
+    <section class="card" style="margin-top:14px" id="skuDetailSelector">
+      <div class="flex-between">
+        <h2>🔎 Detalle económico del SKU</h2>
+        <div class="controls">
+          <label style="color:var(--muted);font-size:12px">SKU padre</label>
+          <select id="selSkuDetail" style="min-width:240px"><option value="">— Seleccionar SKU —</option></select>
+          <button class="btn" id="btnClearSkuDetail">Limpiar</button>
+          <button class="btn" id="btnExportSkuDetail">⬇ Excel resumen</button>
+          <button class="btn" id="btnExportSkuPubs">⬇ Excel publicaciones</button>
+          <button class="btn" id="btnExportSkuRows">⬇ Excel ventas</button>
+        </div>
+      </div>
+      <div id="skuDetailEmpty" class="empty">Seleccioná un SKU para ver el detalle económico y las publicaciones MLA.</div>
+    </section>
+
+    <section class="card" id="skuDetailSummary" style="margin-top:14px;display:none">
+      <div class="flex-between" style="margin-bottom:8px">
+        <div>
+          <h2 id="skuDetailTitle" style="margin-bottom:4px">—</h2>
+          <div id="skuDetailSub" style="color:var(--muted);font-size:12.5px"></div>
+        </div>
+        <div id="skuDetailBadge"></div>
+      </div>
+      <h3>Resumen general</h3>
+      <div class="row" id="skuDetailResumen"></div>
+      <h3 style="margin-top:14px">Métricas económicas</h3>
+      <div class="row" id="skuDetailEconomico"></div>
+      <h3 style="margin-top:14px">Cuotas</h3>
+      <div class="row" id="skuDetailCuotas"></div>
+    </section>
+
+    <section class="card" id="skuDetailPubLeaders" style="margin-top:14px;display:none">
+      <h2>🏆 Publicaciones líderes del SKU</h2>
+      <div class="row" id="skuDetailLeaders"></div>
+    </section>
+
+    <section class="card" id="skuDetailPubTableBox" style="margin-top:14px;display:none">
+      <div class="flex-between">
+        <h2>Publicaciones MLA del SKU</h2>
+        <div class="controls">
+          <span class="chip" id="skuDetailPubCount">—</span>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table id="tblSkuPubs">
+          <thead><tr>
+            <th data-k="mla">MLA</th>
+            <th data-k="titulo">Título</th>
+            <th data-k="variantes">Variantes vendidas</th>
+            <th data-k="ventas" class="num">Ventas</th>
+            <th data-k="unidades" class="num">Uds</th>
+            <th data-k="vvp_total" class="num">Venta público total</th>
+            <th data-k="vvp_unit" class="num">VVP unit.</th>
+            <th data-k="precio_prom" class="num">Precio prom.</th>
+            <th data-k="precio_min" class="num">Precio mín.</th>
+            <th data-k="precio_max" class="num">Precio máx.</th>
+            <th data-k="cargo_total" class="num">Cargo ML</th>
+            <th data-k="ing_envio_total" class="num">Ing. envío</th>
+            <th data-k="costo_envio_total" class="num">Costo envío</th>
+            <th data-k="desc_total" class="num">Descuentos</th>
+            <th data-k="anul_total" class="num">Anulaciones</th>
+            <th data-k="neto_total" class="num">Neto total</th>
+            <th data-k="neto_unit" class="num">Neto unit.</th>
+            <th data-k="precio_neto_obj" class="num">Neto obj. (Lista)</th>
+            <th data-k="dif_abs" class="num">Dif abs</th>
+            <th data-k="dif_pct" class="num">Dif %</th>
+            <th data-k="modalidad_dom">Modalidad</th>
+            <th data-k="provincia_dom">Provincia</th>
+            <th data-k="pub_count" class="num">Con publi</th>
+            <th data-k="pub_pct" class="num">% publi</th>
+            <th data-k="estado">Estado</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" id="skuDetailRowsBox" style="margin-top:14px;display:none">
+      <div class="flex-between">
+        <h2>Detalle fila por fila (últimas 300)</h2>
+        <span class="chip" id="skuDetailRowsCount">—</span>
+      </div>
+      <div class="tbl-wrap">
+        <table id="tblSkuRows">
+          <thead><tr>
+            <th>Fecha</th>
+            <th># Venta</th>
+            <th>MLA</th>
+            <th>SKU vendido</th>
+            <th>Variante</th>
+            <th class="num">Uds</th>
+            <th class="num">Precio unit.</th>
+            <th class="num">VVP</th>
+            <th class="num">Cargo ML</th>
+            <th class="num">Ing. envío</th>
+            <th class="num">Costo envío</th>
+            <th class="num">Descuentos</th>
+            <th class="num">Anulac.</th>
+            <th class="num">Neto (Total)</th>
+            <th class="num">Neto unit.</th>
+            <th>Modalidad</th>
+            <th>Provincia</th>
+            <th>Publi</th>
+            <th>Cuotas</th>
+            <th>Estado vs obj.</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================ LOGÍSTICA ================ -->
+  <div class="tab" id="tab-logistica">
+    <section class="card">
+      <h2>Ventas por modalidad logística</h2>
+      <div class="tbl-wrap">
+        <table id="tblLogistica">
+          <thead><tr>
+            <th>Modalidad</th>
+            <th class="num">Ventas</th>
+            <th class="num">% Ventas</th>
+            <th class="num">Unidades</th>
+            <th class="num">Facturación bruta</th>
+            <th class="num">Neto</th>
+            <th class="num">Costo envío</th>
+            <th class="num">Ingreso envío</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="grid-2" style="margin-top:14px">
+      <div class="card"><h2>Ventas</h2><div class="chart-box"><canvas id="chartLogVentas"></canvas></div></div>
+      <div class="card"><h2>Neto</h2><div class="chart-box"><canvas id="chartLogNeto"></canvas></div></div>
+    </section>
+  </div>
+
+  <!-- ================ ZONAS ================ -->
+  <div class="tab" id="tab-zonas">
+    <section class="grid-2">
+      <div class="card">
+        <div class="flex-between"><h2>Envíos por provincia</h2>
+          <button class="btn" id="btnExportProv">⬇ CSV</button></div>
+        <div class="tbl-wrap">
+          <table id="tblProv">
+            <thead><tr>
+              <th data-k="provincia">Provincia</th>
+              <th data-k="envios" class="num">Envíos</th>
+              <th data-k="unidades" class="num">Unidades</th>
+              <th data-k="facturacion" class="num">Facturación</th>
+              <th data-k="neto" class="num">Neto</th>
+              <th data-k="pct" class="num">% envíos</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="flex-between"><h2>Envíos por ciudad (Top 50)</h2>
+          <button class="btn" id="btnExportCity">⬇ CSV</button></div>
+        <div class="tbl-wrap">
+          <table id="tblCity">
+            <thead><tr>
+              <th data-k="ciudad">Ciudad</th>
+              <th data-k="provincia">Provincia</th>
+              <th data-k="envios" class="num">Envíos</th>
+              <th data-k="unidades" class="num">Unidades</th>
+              <th data-k="facturacion" class="num">Facturación</th>
+              <th data-k="neto" class="num">Neto</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section class="card" style="margin-top:14px">
+      <h2>Distribución por provincia</h2>
+      <div class="chart-box" style="height:360px"><canvas id="chartProv"></canvas></div>
+    </section>
+  </div>
+
+  <!-- ================ EXCEPCIONES ================ -->
+  <div class="tab" id="tab-excepciones">
+    <section class="row">
+      <div class="card kpi" id="kpiSinSku"></div>
+      <div class="card kpi" id="kpiSinMatch"></div>
+      <div class="card kpi" id="kpiPrecioInv"></div>
+      <div class="card kpi" id="kpiCombos"></div>
+    </section>
+    <section class="card" style="margin-top:14px">
+      <div class="flex-between">
+        <h2>SKU del reporte sin match en lista de precios</h2>
+        <button class="btn" id="btnExportSinMatch">⬇ CSV</button>
+      </div>
+      <div class="tbl-wrap">
+        <table id="tblSinMatch">
+          <thead><tr>
+            <th>SKU original</th><th class="num">Apariciones</th><th class="num">Unidades</th>
+            <th class="num">Neto total</th><th>Ejemplo de publicación</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card" style="margin-top:14px">
+      <h2>SKUs con precio neto inválido</h2>
+      <div class="tbl-wrap">
+        <table id="tblPrecioInv">
+          <thead><tr><th>SKU</th><th>Modelo</th><th>Categoría</th><th>Valor bruto</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card" style="margin-top:14px">
+      <h2>Filas sin SKU</h2>
+      <div class="tbl-wrap">
+        <table id="tblSinSku">
+          <thead><tr><th># Venta</th><th>Fecha</th><th>Título</th><th class="num">Unidades</th><th class="num">Total</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ================ AUDITORÍA ================ -->
+  <div class="tab" id="tab-auditoria">
+    <section class="row" id="auditKpis"></section>
+    <section class="card" style="margin-top:14px">
+      <div class="flex-between">
+        <h2>Auditoría detallada de cruce</h2>
+        <div class="controls">
+          <input type="text" id="auditSearch" placeholder="Buscar SKU..."/>
+          <select id="auditFilter">
+            <option value="">Todos los tipos</option>
+            <option value="exacto">Match exacto</option>
+            <option value="variante">Match por variante</option>
+            <option value="sin_match">Sin match</option>
+            <option value="precio_invalido">Precio inválido</option>
+            <option value="sin_sku">Sin SKU</option>
+          </select>
+          <button class="btn" id="btnExportAudit">⬇ CSV</button>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table id="tblAudit">
+          <thead><tr>
+            <th>SKU original</th>
+            <th>SKU padre</th>
+            <th>Tipo de match</th>
+            <th class="num">Precio neto</th>
+            <th class="num">Apariciones</th>
+            <th>Observación</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="hint">Esta tabla está agregada por SKU original para hacerla legible. Cada fila representa todas las apariciones de ese SKU en el reporte.</div>
+    </section>
+  </div>
+
+  <!-- ================ CONFIG ================ -->
+  <div class="tab" id="tab-config">
+
+    <!-- FIREBASE SYNC SECTION -->
+    <section class="card">
+      <h2>☁️ Sincronización en la nube — acceso desde cualquier PC</h2>
+      <div style="margin-bottom:14px">
+        <span id="fbStatus" class="chip" style="font-size:13px;padding:6px 16px">⚫ Firebase no configurado</span>
+      </div>
+      <div style="color:var(--muted);line-height:1.85;font-size:13px;max-width:780px">
+        <b style="color:var(--text)">Paso 1 — Crear la base de datos gratuita en Firebase:</b>
+        <ol style="margin:8px 0 0 0;padding-left:22px">
+          <li>Entrá a <b>console.firebase.google.com</b> con tu cuenta de Google</li>
+          <li>Clic en <b>Agregar proyecto</b> → poné cualquier nombre → Continuar × 2</li>
+          <li>En el menú lateral: <b>Build → Realtime Database → Crear base de datos → Modo de prueba → Habilitar</b></li>
+          <li>En ⚙ <b>Configuración del proyecto → General → Tu app</b> → clic en <b>&lt;/&gt;</b> (Web) → Registrar app (cualquier nombre) → te muestra el objeto <span class="kbd">firebaseConfig</span></li>
+          <li>Copiá ese objeto JSON y pegalo abajo → clic <b>Conectar</b></li>
+        </ol>
+        <div style="margin-top:12px">
+          <b style="color:var(--text)">Paso 2 — Publicar el sitio para compartir el link:</b><br>
+          Subí los 3 archivos (<span class="kbd">index.html</span>, <span class="kbd">styles.css</span>, <span class="kbd">app.js</span>) a
+          <b>netlify.com → Deploy manually → arrastrá la carpeta</b>. Obtenés un link gratuito tipo
+          <span class="kbd">https://tuapp.netlify.app</span> para compartir con quien quieras.
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <label style="color:var(--muted);font-size:12px;display:block;margin-bottom:6px">Pegá tu <span class="kbd">firebaseConfig</span> (objeto JSON):</label>
+        <textarea id="fbConfigInput" rows="9"
+          style="width:100%;max-width:740px;background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;font-family:monospace;resize:vertical"
+          placeholder='{&#10;  "apiKey": "AIzaSy...",&#10;  "authDomain": "mi-proyecto.firebaseapp.com",&#10;  "databaseURL": "https://mi-proyecto-default-rtdb.firebaseio.com",&#10;  "projectId": "mi-proyecto",&#10;  "storageBucket": "mi-proyecto.appspot.com",&#10;  "messagingSenderId": "123456789",&#10;  "appId": "1:123456789:web:abc..."&#10;}'></textarea>
+        <div class="controls" style="margin-top:10px">
+          <button class="btn primary" id="btnFbConnect">🔥 Conectar Firebase</button>
+          <button class="btn danger" id="btnFbDisconnect">🗑 Borrar config guardada</button>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          💡 La configuración queda guardada en este navegador. Una vez conectado, cualquier reporte o lista que cargues se sincroniza automáticamente para todos los usuarios que abran el link.
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:14px">
+      <h2>Lista de precios</h2>
+      <div id="priceListStatus"></div>
+      <div class="controls" style="margin-top:10px">
+        <div class="file-input btn primary">
+          📋 Cargar / Reemplazar lista de precios
+          <input type="file" id="filePrices2" accept=".xlsx,.xls"/>
+        </div>
+        <button class="btn danger" id="btnClearPriceList">🗑 Borrar lista de precios</button>
+        <button class="btn" id="btnExportPriceList">⬇ Exportar lista expandida (CSV)</button>
+      </div>
+      <div class="tbl-wrap" style="margin-top:12px;max-height:380px">
+        <table id="tblPriceList">
+          <thead><tr>
+            <th>SKU</th><th>SKU padre</th><th>Modelo</th><th>Categoría</th><th class="num">Precio neto</th><th>Válido</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:14px">
+      <h2>Historial de reportes cargados</h2>
+      <div class="tbl-wrap" style="max-height:300px">
+        <table id="tblHistory">
+          <thead><tr><th>Fecha carga</th><th>Archivo</th><th>Período</th><th class="num">Filas</th><th class="num">Neto total</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="controls" style="margin-top:10px">
+        <button class="btn danger" id="btnClearHistory">🗑 Borrar historial</button>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:14px">
+      <h2>Ayuda rápida</h2>
+      <div style="color:var(--muted);line-height:1.7">
+        1. Cargá la lista de precios una vez (queda guardada en <span class="kbd">localStorage</span>).<br>
+        2. Cargá un reporte XLSX de Mercado Libre — hoja <span class="kbd">Ventas AR</span>, header en fila 6.<br>
+        3. Revisá el Dashboard, Control de precios, Logística y Auditoría.<br>
+        4. Exportá cualquier tabla a CSV con los botones <span class="kbd">⬇ CSV</span>.<br>
+        5. Para comparar con otro período, simplemente cargá un nuevo reporte: reemplaza al anterior pero la lista de precios se mantiene.
+      </div>
+    </section>
+  </div>
+
+</main>
+
+<div id="toastHost"></div>
+
+<!-- Firebase SDK (compat v9) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
