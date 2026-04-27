@@ -1313,12 +1313,15 @@ $('#btnSaveToCloud').onclick = async ()=>{
   const periodStr = p ? `${fmtDate(p.from)} → ${fmtDate(p.to)}` : 'Sin periodo';
   const neto = s.rows.reduce((a,r)=>a+(r._total||0), 0);
   
+  const customName = prompt('Asigna un nombre a este reporte para guardarlo en el historial (ej: "Reporte Enero 2024"):', s.meta.fileName || 'Reporte Ventas');
+  if(customName === null) return; // Cancelado por el usuario
+  
   const id = 'rep_' + Date.now();
   toast('Guardando en la nube (puede tardar unos segundos)...','');
   try {
     await _db.ref(`mlanalyzer/history/${id}`).set({
       loadedAt: Date.now(),
-      fileName: s.meta.fileName || 'Reporte',
+      fileName: customName.trim() || 'Reporte sin nombre',
       period: periodStr,
       rows: rowsStr,
       meta: metaStr,
