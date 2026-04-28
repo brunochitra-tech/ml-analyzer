@@ -113,3 +113,50 @@ tr.row-worst td:first-child{border-left:3px solid var(--bad)}
 
 .login-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(15,23,42,0.95);z-index:9999;display:flex;align-items:center;justify-content:center}
 .login-box{background:var(--panel);padding:30px;border-radius:12px;border:1px solid var(--border);width:100%;max-width:380px;box-shadow:var(--shadow)}
+/* ── ALERTAS AUTOMÁTICAS ── */
+.alerts-panel {
+  margin-bottom: 14px;
+}
+.alerts-panel h2 {
+  margin-bottom: 10px;
+}
+.alert-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 7px;
+  margin-bottom: 8px;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.alert-item.critical {
+  background: rgba(239,75,92,.13);
+  border-left: 3px solid #ef4b5c;
+}
+.alert-item.warn {
+  background: rgba(244,178,59,.11);
+  border-left: 3px solid #f4b23b;
+}
+.alert-item.info {
+  background: rgba(76,154,255,.10);
+  border-left: 3px solid #4c9aff;
+}
+.alert-item .alert-icon {
+  font-size: 16px;
+  margin-top: 1px;
+}
+.alert-item .alert-text b {
+  display: block;
+  margin-bottom: 2px;
+  color: #e6ecf5;
+}
+.alert-item .alert-text span {
+  color: #8a94ab;
+  font-size: 12.5px;
+}
+.alerts-empty {
+  color: #2fbf71;
+  font-size: 13px;
+  padding: 8px 0;
+}
