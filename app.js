@@ -663,6 +663,7 @@ function refreshAll(){
   populateFilters();
   renderStatus();
   renderDashboard();
+  renderAlerts();
   renderSkuTab();
   renderPreciosTab();
   renderLogisticaTab();
@@ -681,7 +682,77 @@ function renderStatus(){
   const cloudBadge = fbConnected() ? ' ☁️' : '';
   $('#statusBox').innerHTML = '✅ '+s.rows.length+' filas · '+perStr+(state.filtered?(' · '+state.filtered.length+' filtradas'):'')+cloudBadge;
 }
+// ---------- ALERTAS AUTOMÁTICAS ----------
+function renderAlerts(){
+  const rows = state.filtered;
+  const panel = $('#alertsPanel');
+  const list = $('#alertsList');
+  if(!rows || !rows.length){ panel.style.display='none'; return; }
 
+  const alerts = [];
+
+  const skuAgg = computeSkuAggregates(rows);
+  const criticos = skuAgg.filter(r => r.dif_pct != null && r.dif_pct < -0.15);
+  if(criticos.length){
+    alerts.push({ type:'critical', icon:'🔴',
+      title: criticos.length + ' SKU' + (criticos.length>1?'s':'') + ' más de 15% bajo objetivo',
+      sub: criticos.slice(0,3).map(r=>r.sku_padre).join(', ') + (criticos.length>3?' y '+(criticos.length-3)+' más':'')
+    });
+  }
+
+  const sinMatch = rows.filter(r => r._sku_raw && !r._sku_padre);
+  const sinMatchUniq = [...new Set(sinMatch.map(r=>r._sku_raw))];
+  if(sinMatchUniq.length){
+    alerts.push({ type:'warn', icon:'🟠',
+      title: sinMatchUniq.length + ' SKU' + (sinMatchUniq.length>1?'s':'') + ' sin match en lista de precios',
+      sub: sinMatchUniq.slice(0,3).join(', ') + (sinMatchUniq.length>3?' y '+(sinMatchUniq.length-3)+' más':'')
+    });
+  }
+
+  const canceladas = rows.filter(r => r._cancelada);
+  const tasaDevol = canceladas.length / rows.length;
+  if(tasaDevol > 0.05){
+    alerts.push({ type:'warn', icon:'⚠️',
+      title: 'Tasa de devolución/cancelación elevada: ' + (tasaDevol*100).toFixed(1) + '%',
+      sub: canceladas.length + ' ventas canceladas o devueltas sobre ' + rows.length + ' totales'
+    });
+  }
+
+  const provMap = new Map();
+  rows.forEach(r=>{ const p=r.provincia||'Sin provincia'; provMap.set(p,(provMap.get(p)||0)+1); });
+  const topProv = [...provMap.entries()].sort((a,b)=>b[1]-a[1])[0];
+  if(topProv && topProv[1]/rows.length > 0.60){
+    alerts.push({ type:'info', icon:'📦',
+      title: 'Alta concentración en ' + topProv[0] + ': ' + (topProv[1]/rows.length*100).toFixed(1) + '% de los envíos',
+      sub: 'Considerá diversificar o revisar logística regional'
+    });
+  }
+
+  const conPubli = rows.filter(r=>r._publicidad).length;
+  const pctPubli = conPubli / rows.length;
+  if(pctPubli > 0.40){
+    alerts.push({ type:'info', icon:'📢',
+      title: 'Alto porcentaje de ventas con publicidad: ' + (pctPubli*100).toFixed(1) + '%',
+      sub: conPubli + ' ventas con publicidad activa — revisá el impacto en rentabilidad'
+    });
+  }
+
+  if(!alerts.length){
+    panel.style.display='block';
+    list.innerHTML='<div class="alerts-empty">✅ Todo en orden — sin alertas críticas en este reporte.</div>';
+    return;
+  }
+
+  panel.style.display='block';
+  list.innerHTML = alerts.map(a=>`
+    <div class="alert-item ${a.type}">
+      <span class="alert-icon">${a.icon}</span>
+      <div class="alert-text">
+        <b>${a.title}</b>
+        <span>${a.sub}</span>
+      </div>
+    </div>`).join('');
+}
 // ---------- DASHBOARD ----------
 function renderDashboard(){
   const rows = state.filtered;
