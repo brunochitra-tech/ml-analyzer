@@ -1462,7 +1462,10 @@ async function loadCompReport(id){
   const snap = await _db.ref('mlanalyzer/history/'+id).once('value');
   const data = snap.val();
   if(!data || !data.rows) throw new Error('Reporte sin datos de filas');
-  const rows = JSON.parse(data.rows).map(_deserializeRow);
+  let rows;
+  try { rows = JSON.parse(data.rows).map(_deserializeRow); }
+  catch(e) { throw new Error('Datos del reporte corruptos: ' + e.message); }
+  if(!Array.isArray(rows)) throw new Error('Formato de filas inválido');
   enrichRowsArr(rows);
   const filtered = rows.filter(r => !r._cancelada);
   const skuData = computeSkuAggregates(filtered);
@@ -1525,7 +1528,7 @@ function renderComparativa(dataA, dataB){
     const ntA = a ? a.neto_total : 0, ntB = b ? b.neto_total : 0;
     return {
       sku: sku,
-      modelo: (a||b).modelo || '',
+      modelo: (a ? a.modelo : b ? b.modelo : '') || '',
       nuA, nuB, delta, deltaPct,
       unidA: unidDA, unidB: unidDB, deltaUnid: unidDB - unidDA,
       ntA, ntB, deltaNeto: ntB - ntA,
@@ -1634,13 +1637,6 @@ $('#btnExportComp').onclick = () => {
 };
 
 // ---------- EXPORTACIONES ----------
-function exportCSV(filename,rows,columns){
-  const header=columns.map(c=>c.label).join(',');
-  const lines=rows.map(r=>columns.map(c=>{ let v=c.get(r); if(v==null) v=''; v=String(v).replace(/"/g,'""'); if(/[",\n;]/.test(v)) v='"'+v+'"'; return v; }).join(','));
-  const csv=[header].concat(lines).join('\n');
-  const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
-  const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
-}
 function exportExcel(filename, rows, columns) {
   // Auto-detect column type from label keywords + sample value
   function inferType(label, sample) {
@@ -1861,8 +1857,7 @@ $('#btnFbConnect').onclick = ()=>{
   if(!raw){ toast('Pegá la configuración de Firebase primero','error'); return; }
   try{
     let cfg;
-    try { cfg = JSON.parse(raw); } 
-    catch(err) { cfg = new Function('return ' + raw)(); }
+    cfg = JSON.parse(raw);
     if(initFirebase(cfg)) toast('Conectando a Firebase...','');
   }catch(e){ toast('Configuración inválida: '+e.message,'error'); }
 };
