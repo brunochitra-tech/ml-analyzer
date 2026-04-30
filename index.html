@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>ML Analyzer — Rentabilidad y Control de Precios</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <link rel="stylesheet" href="styles.css" />
 </head>
@@ -44,6 +44,7 @@
     <button data-tab="excepciones">Excepciones</button>
     <button data-tab="auditoria">Auditoría</button>
     <button data-tab="calidad">⚠️ Calidad / Devoluciones</button>
+    <button data-tab="comparativa">📊 Comparativa</button>
     <button data-tab="config">Configuración</button>
   </nav>
 </header>
@@ -411,7 +412,7 @@
     <section class="card" style="margin-top:14px">
       <div class="flex-between">
         <h2>SKU del reporte sin match en lista de precios</h2>
-        <button class="btn" id="btnExportSinMatch">⬇ CSV</button>
+        <button class="btn" id="btnExportSinMatch">⬇ Excel</button>
       </div>
       <div class="tbl-wrap">
         <table id="tblSinMatch">
@@ -502,7 +503,7 @@
     <section class="card" style="margin-top:14px">
       <div class="flex-between">
         <h2>Detalle de filas canceladas / devueltas</h2>
-        <button class="btn" id="btnExportCalidad">⬇ Exportar CSV</button>
+        <button class="btn" id="btnExportCalidad">⬇ Exportar Excel</button>
       </div>
       <div class="tbl-wrap">
         <table id="tblCalidadDetail">
@@ -569,7 +570,7 @@
           <input type="file" id="filePrices2" accept=".xlsx,.xls"/>
         </div>
         <button class="btn danger" id="btnClearPriceList">🗑 Borrar lista de precios</button>
-        <button class="btn" id="btnExportPriceList">⬇ Exportar lista expandida (CSV)</button>
+        <button class="btn" id="btnExportPriceList">⬇ Exportar lista expandida (Excel)</button>
       </div>
       <div class="tbl-wrap" style="margin-top:12px;max-height:380px">
         <table id="tblPriceList">
@@ -597,10 +598,100 @@
         1. Cargá la lista de precios una vez (queda guardada en <span class="kbd">localStorage</span>).<br>
         2. Cargá un reporte XLSX de Mercado Libre — hoja <span class="kbd">Ventas AR</span>, header en fila 6.<br>
         3. Revisá el Dashboard, Control de precios, Logística y Auditoría.<br>
-        4. Exportá cualquier tabla a CSV con los botones <span class="kbd">⬇ CSV</span>.<br>
+        4. Exportá cualquier tabla a Excel con los botones <span class="kbd">⬇ Excel</span>.<br>
         5. Para comparar con otro período, simplemente cargá un nuevo reporte: reemplaza al anterior pero la lista de precios se mantiene.
       </div>
     </section>
+  </div>
+
+  <!-- ============ COMPARATIVA ============ -->
+  <div class="tab" id="tab-comparativa">
+
+    <div class="card">
+      <h2>📊 Comparativa de períodos</h2>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end;margin-top:14px">
+        <div style="flex:1;min-width:240px">
+          <div style="font-weight:600;margin-bottom:6px;font-size:13px;color:var(--muted)">PERÍODO A — Base</div>
+          <select id="selCompA" style="width:100%;background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px">
+            <option value="">— Seleccioná un reporte —</option>
+          </select>
+        </div>
+        <div style="font-weight:700;font-size:1.6rem;padding-bottom:6px;color:var(--muted)">VS</div>
+        <div style="flex:1;min-width:240px">
+          <div style="font-weight:600;margin-bottom:6px;font-size:13px;color:var(--muted)">PERÍODO B — Nuevo</div>
+          <select id="selCompB" style="width:100%;background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px">
+            <option value="">— Seleccioná un reporte —</option>
+          </select>
+        </div>
+        <div>
+          <button id="btnCompare" class="btn primary" style="padding:9px 24px;font-size:14px">Comparar →</button>
+        </div>
+      </div>
+      <div id="compMsg" style="margin-top:12px;color:var(--muted);font-size:13px">
+        Seleccioná dos reportes guardados en el historial de la nube para ver la comparativa de períodos.
+      </div>
+    </div>
+
+    <div id="compResults" style="display:none;margin-top:16px">
+
+      <!-- KPI cards -->
+      <div class="kpi-row" id="compKpiRow"></div>
+
+      <!-- Top movers -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+        <div class="card">
+          <h3 style="color:var(--ok);margin-bottom:10px">↑ Top 10 que más mejoraron</h3>
+          <div class="tbl-wrap">
+            <table id="tblCompBetter">
+              <thead><tr>
+                <th>SKU</th><th>Modelo</th>
+                <th class="num">Neto unit. A</th><th class="num">Neto unit. B</th>
+                <th class="num">Δ abs</th><th class="num">Δ %</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="color:var(--danger);margin-bottom:10px">↓ Top 10 que más empeoraron</h3>
+          <div class="tbl-wrap">
+            <table id="tblCompWorse">
+              <thead><tr>
+                <th>SKU</th><th>Modelo</th>
+                <th class="num">Neto unit. A</th><th class="num">Neto unit. B</th>
+                <th class="num">Δ abs</th><th class="num">Δ %</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Full table -->
+      <div class="card" style="margin-top:16px">
+        <div class="flex-between">
+          <h3>Detalle completo por SKU</h3>
+          <button id="btnExportComp" class="btn">⬇ Excel</button>
+        </div>
+        <div class="tbl-wrap" style="margin-top:10px">
+          <table id="tblComp">
+            <thead>
+              <tr>
+                <th>SKU</th><th>Modelo</th>
+                <th class="num">Neto unit. A</th><th class="num">Neto unit. B</th>
+                <th class="num">Δ abs</th><th class="num">Δ %</th>
+                <th style="text-align:center">Tend.</th>
+                <th class="num">Unid. A</th><th class="num">Unid. B</th><th class="num">Δ Unid.</th>
+                <th class="num">Neto tot. A</th><th class="num">Neto tot. B</th><th class="num">Δ Neto</th>
+                <th>Modal. A</th><th>Modal. B</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
   </div>
 
 </main>

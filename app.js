@@ -318,6 +318,7 @@ document.addEventListener('click', e=>{
 function switchTab(t){
   $$('#tabsNav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===t));
   $$('.tab').forEach(x=>x.classList.toggle('active',x.id==='tab-'+t));
+  if(t === 'comparativa') renderCompSelects();
 }
 
 // ---------- Lectura de archivos ----------
@@ -606,6 +607,30 @@ function enrichSales(){
     r._ingreso_neto_unit = safeDiv(r._total, r._unidades);
     r._dif_abs = (r._ingreso_neto_unit!=null && r._precio_neto_obj!=null) ? r._ingreso_neto_unit - r._precio_neto_obj : null;
     r._dif_pct = (r._ingreso_neto_unit!=null && r._precio_neto_obj) ? (r._ingreso_neto_unit/r._precio_neto_obj - 1) : null;
+  });
+}
+
+function enrichRowsArr(rows){
+  const pl = state.priceList;
+  rows.forEach(r=>{
+    if(!r._sku_norm) r._sku_norm = normalizeSku(r._sku_raw);
+    if(!r._sku_soft) r._sku_soft = normalizeSkuSoft(r._sku_raw);
+    let match=null, matchKind='sin_match';
+    if(!r._sku_raw){ matchKind='sin_sku'; }
+    else if(pl){
+      const ex=pl.byExact.get(r._sku_norm);
+      if(ex){ match=ex; matchKind=ex.matchKind==='principal'?'exacto':'variante'; }
+      else{ const soft=pl.expanded.get(r._sku_soft); if(soft){ match=soft; matchKind=soft.matchKind==='principal'?'exacto':'variante'; } }
+    }
+    if(match){
+      r._sku_padre=match.sku_padre; r._modelo=match.modelo; r._categoria=match.categoria;
+      r._precio_neto_obj=match.precio_neto; r._precio_valido=match.valido;
+      r._match_kind=matchKind; if(!match.valido) r._match_kind='precio_invalido';
+    } else {
+      r._sku_padre=null; r._modelo=null; r._categoria=null;
+      r._precio_neto_obj=null; r._precio_valido=false; r._match_kind=matchKind;
+    }
+    r._ingreso_neto_unit=safeDiv(r._total,r._unidades);
   });
 }
 
@@ -1337,6 +1362,7 @@ function _setupHistoryListener(){
     const val = snap.val() || {};
     cloudHistory = Object.keys(val).map(k => ({id:k, ...val[k]})).sort((a,b)=>b.loadedAt - a.loadedAt);
     renderHistory();
+    renderCompSelects();
   });
 }
 
@@ -1404,6 +1430,209 @@ $('#btnSaveToCloud').onclick = async ()=>{
   }
 };
 
+// ---------- COMPARATIVA ----------
+let _compDataA = null, _compDataB = null, _compRows = [];
+
+function renderCompSelects(){
+  const sel = cloudHistory.length
+    ? cloudHistory
+    : loadHistory().filter(h => h.rows && typeof h.rows === 'string');
+  const makeOpts = id => {
+    const el = $('#' + id); if(!el) return;
+    const prev = el.value;
+    el.innerHTML = '<option value="">— Seleccioná un reporte —</option>';
+    sel.forEach(h => {
+      const o = document.createElement('option');
+      o.value = h.id || h.loadedAt;
+      o.textContent = `${h.fileName||'Sin nombre'} | ${h.period||'—'} | ${fmtMoney(h.neto)}`;
+      el.appendChild(o);
+    });
+    if(prev) el.value = prev;
+  };
+  makeOpts('selCompA');
+  makeOpts('selCompB');
+  if(!sel.length){
+    const msg = $('#compMsg');
+    if(msg) msg.textContent = 'No hay reportes guardados en el historial de la nube. Guardá al menos dos reportes desde el tab Configuración para poder compararlos.';
+  }
+}
+
+async function loadCompReport(id){
+  if(!_db) throw new Error('Firebase no conectado');
+  const snap = await _db.ref('mlanalyzer/history/'+id).once('value');
+  const data = snap.val();
+  if(!data || !data.rows) throw new Error('Reporte sin datos de filas');
+  const rows = JSON.parse(data.rows).map(_deserializeRow);
+  enrichRowsArr(rows);
+  const filtered = rows.filter(r => !r._cancelada);
+  const skuData = computeSkuAggregates(filtered);
+  const pubRows = filtered.filter(r => r._publicidad);
+  return { rows: filtered, skuData, meta: data, pubPct: filtered.length ? pubRows.length / filtered.length : 0 };
+}
+
+function _compKpiCard(label, valA, valB, fmtFn, invertColors){
+  const delta = (valA != null && valB != null) ? valB - valA : null;
+  const deltaPct = (valA && valB) ? (valB / valA - 1) : null;
+  const up = delta != null && delta > 0;
+  const eq = delta != null && Math.abs(delta) < 0.001;
+  const color = eq ? 'var(--text)' : (up ? (invertColors?'var(--danger)':'var(--ok)') : (invertColors?'var(--ok)':'var(--danger)'));
+  const arrow = eq ? '→' : (up ? '↑' : '↓');
+  return `<div class="kpi-card" style="min-width:200px">
+    <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.05em;margin-bottom:8px;text-transform:uppercase">${escapeHtml(label)}</div>
+    <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+      <div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Período A</div>
+        <div style="font-size:1.15rem;font-weight:700">${fmtFn(valA)}</div>
+      </div>
+      <div style="color:var(--muted);font-size:1.1rem;padding-top:18px">→</div>
+      <div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Período B</div>
+        <div style="font-size:1.15rem;font-weight:700">${fmtFn(valB)}</div>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:13px;font-weight:600;color:${color}">
+      ${delta != null ? arrow+' '+fmtFn(delta)+(deltaPct!=null?' ('+fmtPct(deltaPct)+')':'') : '—'}
+    </div>
+  </div>`;
+}
+
+function renderComparativa(dataA, dataB){
+  const sumField = (arr, f) => arr.reduce((s, r) => s + (r[f]||0), 0);
+  const netA = sumField(dataA.skuData,'neto_total'), netB = sumField(dataB.skuData,'neto_total');
+  const unidA = sumField(dataA.skuData,'unidades'), unidB = sumField(dataB.skuData,'unidades');
+  const ticketA = safeDiv(netA, unidA), ticketB = safeDiv(netB, unidB);
+
+  // KPI cards
+  $('#compKpiRow').innerHTML =
+    _compKpiCard('Neto total', netA, netB, fmtMoney) +
+    _compKpiCard('Unidades vendidas', unidA, unidB, fmtInt) +
+    _compKpiCard('Ticket promedio', ticketA, ticketB, fmtMoney) +
+    _compKpiCard('% con publicidad', dataA.pubPct, dataB.pubPct, fmtPct);
+
+  // Build per-SKU comparison map
+  const mapA = new Map(dataA.skuData.map(r => [r.sku_padre, r]));
+  const mapB = new Map(dataB.skuData.map(r => [r.sku_padre, r]));
+  const allSkus = new Set([...mapA.keys(), ...mapB.keys()]);
+
+  _compRows = [...allSkus].map(sku => {
+    const a = mapA.get(sku) || null;
+    const b = mapB.get(sku) || null;
+    const nuA = a ? a.neto_unit_prom : null;
+    const nuB = b ? b.neto_unit_prom : null;
+    const delta = (nuA != null && nuB != null) ? nuB - nuA : null;
+    const deltaPct = (nuA && nuB) ? (nuB / nuA - 1) : null;
+    const unidDA = a ? a.unidades : 0, unidDB = b ? b.unidades : 0;
+    const ntA = a ? a.neto_total : 0, ntB = b ? b.neto_total : 0;
+    return {
+      sku: sku,
+      modelo: (a||b).modelo || '',
+      nuA, nuB, delta, deltaPct,
+      unidA: unidDA, unidB: unidDB, deltaUnid: unidDB - unidDA,
+      ntA, ntB, deltaNeto: ntB - ntA,
+      modalA: a ? (a.modalidad_dom||'—') : '—',
+      modalB: b ? (b.modalidad_dom||'—') : '—',
+      modalChanged: a && b && a.modalidad_dom !== b.modalidad_dom
+    };
+  }).sort((x, y) => {
+    const dx = x.delta != null ? x.delta : -Infinity;
+    const dy = y.delta != null ? y.delta : -Infinity;
+    return dy - dx;
+  });
+
+  // Top movers
+  const withDelta = _compRows.filter(r => r.delta != null);
+  const top10Better = withDelta.slice(0, 10);
+  const top10Worse  = [...withDelta].reverse().slice(0, 10);
+
+  const moverRow = r => {
+    const dColor = r.delta >= 0 ? 'var(--ok)' : 'var(--danger)';
+    return `<tr>
+      <td><b>${escapeHtml(r.sku)}</b></td>
+      <td>${escapeHtml(r.modelo)}</td>
+      <td class="num">${fmtMoney(r.nuA)}</td>
+      <td class="num">${fmtMoney(r.nuB)}</td>
+      <td class="num" style="color:${dColor};font-weight:600">${r.delta>=0?'+':''}${fmtMoney(r.delta)}</td>
+      <td class="num" style="color:${dColor};font-weight:600">${r.deltaPct!=null?(r.deltaPct>=0?'+':'')+fmtPct(r.deltaPct):'—'}</td>
+    </tr>`;
+  };
+  $('#tblCompBetter tbody').innerHTML = top10Better.map(moverRow).join('') || '<tr><td colspan="6" class="empty">—</td></tr>';
+  $('#tblCompWorse tbody').innerHTML  = top10Worse.map(moverRow).join('') || '<tr><td colspan="6" class="empty">—</td></tr>';
+
+  // Full comparison table
+  $('#tblComp tbody').innerHTML = _compRows.map(r => {
+    const up = r.delta != null && r.delta > 0;
+    const eq = r.delta != null && Math.abs(r.delta) < 0.01;
+    const dColor = r.delta == null ? 'var(--muted)' : eq ? 'var(--text)' : up ? 'var(--ok)' : 'var(--danger)';
+    const arrow = r.delta == null ? '—' : eq ? '<span style="color:var(--muted)">→</span>' : up
+      ? '<span style="color:var(--ok);font-weight:700">↑</span>'
+      : '<span style="color:var(--danger);font-weight:700">↓</span>';
+    const moChanged = r.modalChanged ? `style="color:var(--warn);font-weight:600"` : '';
+    const unidColor = r.deltaUnid > 0 ? 'var(--ok)' : r.deltaUnid < 0 ? 'var(--danger)' : 'var(--muted)';
+    const netoColor = r.deltaNeto > 0 ? 'var(--ok)' : r.deltaNeto < 0 ? 'var(--danger)' : 'var(--muted)';
+    return `<tr>
+      <td><b>${escapeHtml(r.sku)}</b></td>
+      <td>${escapeHtml(r.modelo)}</td>
+      <td class="num">${fmtMoney(r.nuA)}</td>
+      <td class="num">${fmtMoney(r.nuB)}</td>
+      <td class="num" style="color:${dColor};font-weight:600">${r.delta!=null?(r.delta>=0?'+':'')+fmtMoney(r.delta):'—'}</td>
+      <td class="num" style="color:${dColor};font-weight:600">${r.deltaPct!=null?(r.deltaPct>=0?'+':'')+fmtPct(r.deltaPct):'—'}</td>
+      <td style="text-align:center;font-size:1.1rem">${arrow}</td>
+      <td class="num">${fmtInt(r.unidA)}</td>
+      <td class="num">${fmtInt(r.unidB)}</td>
+      <td class="num" style="color:${unidColor};font-weight:600">${r.deltaUnid>=0?'+':''}${fmtInt(r.deltaUnid)}</td>
+      <td class="num">${fmtMoney(r.ntA)}</td>
+      <td class="num">${fmtMoney(r.ntB)}</td>
+      <td class="num" style="color:${netoColor};font-weight:600">${r.deltaNeto>=0?'+':''}${fmtMoney(r.deltaNeto)}</td>
+      <td ${moChanged}>${escapeHtml(r.modalA)}</td>
+      <td ${moChanged}>${escapeHtml(r.modalB)}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="15" class="empty">Sin datos para mostrar</td></tr>';
+
+  $('#compResults').style.display = 'block';
+}
+
+$('#btnCompare').onclick = async () => {
+  const idA = $('#selCompA').value, idB = $('#selCompB').value;
+  if(!idA || !idB){ toast('Seleccioná los dos períodos para comparar','error'); return; }
+  if(idA === idB){ toast('Seleccioná dos períodos distintos','error'); return; }
+  if(!_db){ toast('Firebase no conectado — necesitás Firebase para cargar el historial','error'); return; }
+  const msg = $('#compMsg');
+  msg.textContent = 'Cargando reportes...';
+  $('#compResults').style.display = 'none';
+  try {
+    toast('Cargando reportes del historial...','');
+    const [dataA, dataB] = await Promise.all([loadCompReport(idA), loadCompReport(idB)]);
+    _compDataA = dataA; _compDataB = dataB;
+    msg.textContent = `Comparando "${$('#selCompA').selectedOptions[0].text}" vs "${$('#selCompB').selectedOptions[0].text}"`;
+    renderComparativa(dataA, dataB);
+    toast('Comparativa lista','ok');
+  } catch(e) {
+    msg.textContent = 'Error: ' + e.message;
+    toast('Error cargando reportes: '+e.message,'error');
+  }
+};
+
+$('#btnExportComp').onclick = () => {
+  if(!_compRows.length){ toast('Generá la comparativa primero','error'); return; }
+  exportExcel('comparativa.xlsx', _compRows, [
+    {label:'SKU',        get:r=>r.sku},
+    {label:'Modelo',     get:r=>r.modelo},
+    {label:'Neto unit. A', get:r=>r.nuA},
+    {label:'Neto unit. B', get:r=>r.nuB},
+    {label:'Δ Neto unit.',  get:r=>r.delta},
+    {label:'Δ %',        get:r=>r.deltaPct ? r.deltaPct * 100 : null},
+    {label:'Tendencia',  get:r=>r.delta==null?'—':r.delta>0?'Mejora':r.delta<0?'Baja':'Igual'},
+    {label:'Unid. A',    get:r=>r.unidA},
+    {label:'Unid. B',    get:r=>r.unidB},
+    {label:'Δ Unidades', get:r=>r.deltaUnid},
+    {label:'Neto tot. A', get:r=>r.ntA},
+    {label:'Neto tot. B', get:r=>r.ntB},
+    {label:'Δ Neto total', get:r=>r.deltaNeto},
+    {label:'Modal. A',   get:r=>r.modalA},
+    {label:'Modal. B',   get:r=>r.modalB}
+  ]);
+};
+
 // ---------- EXPORTACIONES ----------
 function exportCSV(filename,rows,columns){
   const header=columns.map(c=>c.label).join(',');
@@ -1412,10 +1641,106 @@ function exportCSV(filename,rows,columns){
   const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
   const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
 }
-function exportExcel(filename,rows,columns){
-  const header=columns.map(c=>c.label);
-  const data=rows.map(r=>columns.map(c=>{ let v=c.get(r); if(typeof v==='string') v=v.replace(/<[^>]*>?/gm,''); return v==null?'':v; }));
-  const ws=XLSX.utils.aoa_to_sheet([header].concat(data)); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Datos"); XLSX.writeFile(wb,filename);
+function exportExcel(filename, rows, columns) {
+  // Auto-detect column type from label keywords + sample value
+  function inferType(label, sample) {
+    const l = String(label).toLowerCase();
+    if (l.includes('%') || /\bpct\b/.test(l)) return 'percent';
+    const currencyKw = ['precio','neto','facturac','cargo','ing.','ingreso','costo','descuento','vvp','anulac','importe','total','dif'];
+    if (currencyKw.some(k => l.includes(k))) return 'currency';
+    const intKw = ['ventas','unidades','aparic','variantes','publi','cuotas','envios','envíos','cantidad'];
+    if (intKw.some(k => l.includes(k))) return 'integer';
+    if (typeof sample === 'number') return Number.isInteger(sample) ? 'integer' : 'currency';
+    return 'text';
+  }
+  const firstRow = rows[0];
+  const colTypes = columns.map(c => c.type || inferType(c.label, firstRow ? c.get(firstRow) : null));
+
+  // Style helpers
+  const BR = { style:'thin', color:{ rgb:'BDD7EE' } };
+  const borders = { top:BR, bottom:BR, left:BR, right:BR };
+  const hStyle = {
+    font:{ bold:true, sz:10, name:'Calibri', color:{ rgb:'FFFFFF' } },
+    fill:{ patternType:'solid', fgColor:{ rgb:'1F4E79' } },
+    alignment:{ horizontal:'center', vertical:'center', wrapText:true },
+    border: borders
+  };
+  function dStyle(even, type) {
+    const isNum = type === 'currency' || type === 'integer' || type === 'percent';
+    return {
+      font:{ sz:10, name:'Calibri' },
+      fill:{ patternType:'solid', fgColor:{ rgb: even ? 'D6E4F0' : 'FFFFFF' } },
+      alignment:{ horizontal: isNum ? 'right' : 'left', vertical:'center' },
+      border: borders
+    };
+  }
+  const tBR = { style:'medium', color:{ rgb:'375623' } };
+  function tStyle(type) {
+    const isNum = type === 'currency' || type === 'integer' || type === 'percent';
+    return {
+      font:{ bold:true, sz:10, name:'Calibri', color:{ rgb:'375623' } },
+      fill:{ patternType:'solid', fgColor:{ rgb:'E2EFDA' } },
+      alignment:{ horizontal: isNum ? 'right' : 'left', vertical:'center' },
+      border:{ top:tBR, bottom:BR, left:BR, right:BR }
+    };
+  }
+  const FMT = { currency:'"$"#,##0.00', percent:'0.00"%"', integer:'#,##0' };
+
+  // Build data matrix
+  const dataMatrix = rows.map(r => columns.map(c => {
+    let v = c.get(r);
+    if (typeof v === 'string') v = v.replace(/<[^>]*>?/gm, '');
+    return v == null ? '' : v;
+  }));
+
+  // Totals row (only when there are numeric columns)
+  const hasNumeric = colTypes.some(t => t === 'currency' || t === 'integer' || t === 'percent');
+  const totalsRow = hasNumeric ? columns.map((c, ci) => {
+    const type = colTypes[ci];
+    if (type !== 'currency' && type !== 'integer' && type !== 'percent') return ci === 0 ? 'TOTAL' : '';
+    return rows.reduce((s, r) => { const v = c.get(r); return s + (typeof v === 'number' ? v : 0); }, 0);
+  }) : null;
+
+  const aoa = [columns.map(c => c.label), ...dataMatrix];
+  if (totalsRow) aoa.push(totalsRow);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // Apply styles cell by cell
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const lastR = range.e.r;
+  for (let R = 0; R <= lastR; R++) {
+    for (let C = 0; C <= range.e.c; C++) {
+      const addr = XLSX.utils.encode_cell({ r:R, c:C });
+      if (!ws[addr]) ws[addr] = { v:'', t:'s' };
+      const type = colTypes[C];
+      if (R === 0) {
+        ws[addr].s = hStyle;
+      } else if (totalsRow && R === lastR) {
+        ws[addr].s = tStyle(type);
+        if ((type === 'currency' || type === 'integer' || type === 'percent') && typeof ws[addr].v === 'number') {
+          ws[addr].t = 'n'; ws[addr].z = FMT[type];
+        }
+      } else {
+        const even = (R % 2) === 1;
+        ws[addr].s = dStyle(even, type);
+        if (FMT[type] && typeof ws[addr].v === 'number') { ws[addr].t = 'n'; ws[addr].z = FMT[type]; }
+      }
+    }
+  }
+
+  // Column widths
+  ws['!cols'] = columns.map((c, ci) => {
+    const type = colTypes[ci];
+    const minW = type === 'currency' ? 15 : type === 'percent' ? 10 : type === 'integer' ? 12 : 20;
+    return { wch: Math.max((c.label || '').length + 2, minW) };
+  });
+  ws['!rows'] = [{ hpt: 30 }];
+  ws['!freeze'] = { xSplit:0, ySplit:1 };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Datos');
+  XLSX.writeFile(wb, filename);
 }
 function formatModalidadBadge(raw){
   const s=String(raw||'').toLowerCase();
@@ -1466,8 +1791,8 @@ $('#skuSearch').addEventListener('input',()=>renderSkuTable());
 $('#auditSearch').addEventListener('input',()=>renderAuditoriaTab());
 $('#auditFilter').addEventListener('change',()=>renderAuditoriaTab());
 
-$('#btnExportSku').onclick = ()=>exportCSV('sku.csv',skuData,[{label:'SKU padre',get:r=>r.sku_padre},{label:'Modelo',get:r=>r.modelo},{label:'Categoría',get:r=>r.categoria},{label:'Variantes',get:r=>r.variantes},{label:'Ventas',get:r=>r.ventas},{label:'Unidades',get:r=>r.unidades},{label:'Facturación bruta',get:r=>r.facturacion_bruta},{label:'Neto total',get:r=>r.neto_total},{label:'Neto unit. prom.',get:r=>r.neto_unit_prom},{label:'Precio prom.',get:r=>r.precio_prom},{label:'Precio min',get:r=>r.precio_min},{label:'Precio max',get:r=>r.precio_max},{label:'Con publi',get:r=>r.pub_count},{label:'% publi',get:r=>r.pub_pct},{label:'Modalidad dom.',get:r=>r.modalidad_dom},{label:'Provincia dom.',get:r=>r.provincia_dom},{label:'Neto objetivo',get:r=>r.precio_neto_obj},{label:'Dif abs',get:r=>r.dif_abs},{label:'Dif %',get:r=>r.dif_pct},{label:'Estado',get:r=>r.estado}]);
-$('#btnExportPrecios').onclick = ()=>{ const data=skuData.filter(r=>r.precio_neto_obj!=null && r.neto_unit_prom!=null); exportCSV('control_precios.csv',data,[{label:'SKU padre',get:r=>r.sku_padre},{label:'Modelo',get:r=>r.modelo},{label:'Neto unit. prom.',get:r=>r.neto_unit_prom},{label:'Neto objetivo',get:r=>r.precio_neto_obj},{label:'Dif abs',get:r=>r.dif_abs},{label:'Dif %',get:r=>r.dif_pct},{label:'Estado',get:r=>r.estado},{label:'Unidades',get:r=>r.unidades},{label:'Neto total',get:r=>r.neto_total}]); };
+$('#btnExportSku').onclick = ()=>exportExcel('sku.xlsx',skuData,[{label:'SKU padre',get:r=>r.sku_padre},{label:'Modelo',get:r=>r.modelo},{label:'Categoría',get:r=>r.categoria},{label:'Variantes',get:r=>r.variantes},{label:'Ventas',get:r=>r.ventas},{label:'Unidades',get:r=>r.unidades},{label:'Facturación bruta',get:r=>r.facturacion_bruta},{label:'Neto total',get:r=>r.neto_total},{label:'Neto unit. prom.',get:r=>r.neto_unit_prom},{label:'Precio prom.',get:r=>r.precio_prom},{label:'Precio min',get:r=>r.precio_min},{label:'Precio max',get:r=>r.precio_max},{label:'Con publi',get:r=>r.pub_count},{label:'% publi',get:r=>r.pub_pct},{label:'Modalidad dom.',get:r=>r.modalidad_dom},{label:'Provincia dom.',get:r=>r.provincia_dom},{label:'Neto objetivo',get:r=>r.precio_neto_obj},{label:'Dif abs',get:r=>r.dif_abs},{label:'Dif %',get:r=>r.dif_pct},{label:'Estado',get:r=>r.estado}]);
+$('#btnExportPrecios').onclick = ()=>{ const data=skuData.filter(r=>r.precio_neto_obj!=null && r.neto_unit_prom!=null); exportExcel('control_precios.xlsx',data,[{label:'SKU padre',get:r=>r.sku_padre},{label:'Modelo',get:r=>r.modelo},{label:'Neto unit. prom.',get:r=>r.neto_unit_prom},{label:'Neto objetivo',get:r=>r.precio_neto_obj},{label:'Dif abs',get:r=>r.dif_abs},{label:'Dif %',get:r=>r.dif_pct},{label:'Estado',get:r=>r.estado},{label:'Unidades',get:r=>r.unidades},{label:'Neto total',get:r=>r.neto_total}]); };
 
 $('#selSkuDetail').addEventListener('change', e=>{ state.selectedSkuDetail=e.target.value||null; renderSelectedSkuPriceDetail(); });
 $('#btnClearSkuDetail').onclick = ()=>{ state.selectedSkuDetail=null; $('#selSkuDetail').value=''; renderSelectedSkuPriceDetail(); };
@@ -1498,28 +1823,28 @@ $('#btnExportSkuRows').onclick = ()=>{
   const rows=(state.filtered||[]).filter(r=>r._sku_padre===sku); if(!rows.length){toast('Sin filas','error');return;}
   exportExcel(`ventas_${sku}.xlsx`,rows,[{label:'Fecha',get:r=>r._fecha?r._fecha.toISOString().slice(0,10):''},{label:'# Venta',get:r=>r.num_venta},{label:'MLA',get:r=>r.publicacion},{label:'Título',get:r=>r.titulo},{label:'SKU vendido',get:r=>r._sku_raw},{label:'SKU padre',get:r=>r._sku_padre},{label:'Variante',get:r=>r.variante},{label:'Unidades',get:r=>r._unidades},{label:'Precio unit.',get:r=>r._precio_unit},{label:'Ing. productos',get:r=>r._ing_prod},{label:'Cargo ML',get:r=>r._cargo},{label:'Ing. envío',get:r=>r._ing_envio},{label:'Costo envío',get:r=>r._costo_envio},{label:'Descuentos',get:r=>r._desc},{label:'Anulaciones',get:r=>r._anul},{label:'Total (neto)',get:r=>r._total},{label:'Modalidad',get:r=>r.forma_entrega},{label:'Provincia',get:r=>r.provincia},{label:'Ciudad',get:r=>r.ciudad},{label:'Publicidad',get:r=>r._publicidad?'SI':'NO'},{label:'Cuotas',get:r=>/s[ií]/i.test(String(r.cuotas||''))?'SI':'NO'},{label:'Estado venta',get:r=>r.estado_venta},{label:'Precio neto objetivo',get:r=>r._precio_neto_obj}]);
 };
-$('#btnExportProv').onclick = ()=>exportCSV('provincias.csv',provData,[{label:'Provincia',get:r=>r.provincia},{label:'Envíos',get:r=>r.envios},{label:'Unidades',get:r=>r.unidades},{label:'Facturación',get:r=>r.facturacion},{label:'Neto',get:r=>r.neto},{label:'% envíos',get:r=>r.pct}]);
-$('#btnExportCity').onclick = ()=>exportCSV('ciudades.csv',cityData,[{label:'Ciudad',get:r=>r.ciudad},{label:'Provincia',get:r=>r.provincia},{label:'Envíos',get:r=>r.envios},{label:'Unidades',get:r=>r.unidades},{label:'Facturación',get:r=>r.facturacion},{label:'Neto',get:r=>r.neto}]);
+$('#btnExportProv').onclick = ()=>exportExcel('provincias.xlsx',provData,[{label:'Provincia',get:r=>r.provincia},{label:'Envíos',get:r=>r.envios},{label:'Unidades',get:r=>r.unidades},{label:'Facturación',get:r=>r.facturacion},{label:'Neto',get:r=>r.neto},{label:'% envíos',get:r=>r.pct}]);
+$('#btnExportCity').onclick = ()=>exportExcel('ciudades.xlsx',cityData,[{label:'Ciudad',get:r=>r.ciudad},{label:'Provincia',get:r=>r.provincia},{label:'Envíos',get:r=>r.envios},{label:'Unidades',get:r=>r.unidades},{label:'Facturación',get:r=>r.facturacion},{label:'Neto',get:r=>r.neto}]);
 $('#btnExportSinMatch').onclick = ()=>{
   const rows=(state.filtered||[]).filter(r=>r._sku_raw && !r._sku_padre); const agg=new Map();
   rows.forEach(r=>{ const k=r._sku_raw; let g=agg.get(k); if(!g){g={sku:k,apariciones:0,unidades:0,neto:0,ejemplo:r.titulo||''}; agg.set(k,g);} g.apariciones+=1; g.unidades+=r._unidades; g.neto+=r._total; });
-  exportCSV('sin_match.csv',[...agg.values()],[{label:'SKU original',get:r=>r.sku},{label:'Apariciones',get:r=>r.apariciones},{label:'Unidades',get:r=>r.unidades},{label:'Neto',get:r=>r.neto},{label:'Ejemplo',get:r=>r.ejemplo}]);
+  exportExcel('sin_match.xlsx',[...agg.values()],[{label:'SKU original',get:r=>r.sku},{label:'Apariciones',get:r=>r.apariciones},{label:'Unidades',get:r=>r.unidades},{label:'Neto',get:r=>r.neto},{label:'Ejemplo',get:r=>r.ejemplo}]);
 };
 $('#btnExportAudit').onclick = ()=>{
   const rows=state.filtered||[]; const m=new Map();
   rows.forEach(r=>{ const k=r._sku_raw||'(sin sku)'; let g=m.get(k); if(!g){g={sku_original:k,sku_padre:r._sku_padre||'',tipo:r._match_kind||'sin_match',precio:r._precio_neto_obj,apariciones:0,observacion:describeObs(r)};m.set(k,g);} g.apariciones+=1; });
-  exportCSV('auditoria.csv',[...m.values()],[{label:'SKU original',get:r=>r.sku_original},{label:'SKU padre',get:r=>r.sku_padre},{label:'Tipo match',get:r=>r.tipo},{label:'Precio neto',get:r=>r.precio},{label:'Apariciones',get:r=>r.apariciones},{label:'Observación',get:r=>r.observacion}]);
+  exportExcel('auditoria.xlsx',[...m.values()],[{label:'SKU original',get:r=>r.sku_original},{label:'SKU padre',get:r=>r.sku_padre},{label:'Tipo match',get:r=>r.tipo},{label:'Precio neto',get:r=>r.precio},{label:'Apariciones',get:r=>r.apariciones},{label:'Observación',get:r=>r.observacion}]);
 };
 $('#btnExportPriceList').onclick = ()=>{
   if(!state.priceList) return;
   const items=[];
   state.priceList.raw.forEach(p=>{ items.push({sku:p.sku_padre,parent:p.sku_padre,modelo:p.modelo,cat:p.categoria,precio:p.precio_neto,val:p.valido}); p.variantes.forEach(v=>items.push({sku:v,parent:p.sku_padre,modelo:p.modelo,cat:p.categoria,precio:p.precio_neto,val:p.valido})); });
-  exportCSV('lista_precios_expandida.csv',items,[{label:'SKU',get:r=>r.sku},{label:'SKU padre',get:r=>r.parent},{label:'Modelo',get:r=>r.modelo},{label:'Categoría',get:r=>r.cat},{label:'Precio neto',get:r=>r.precio},{label:'Válido',get:r=>r.val?'SI':'NO'}]);
+  exportExcel('lista_precios_expandida.xlsx',items,[{label:'SKU',get:r=>r.sku},{label:'SKU padre',get:r=>r.parent},{label:'Modelo',get:r=>r.modelo},{label:'Categoría',get:r=>r.cat},{label:'Precio neto',get:r=>r.precio},{label:'Válido',get:r=>r.val?'SI':'NO'}]);
 };
 
 $('#btnExportCalidad').onclick = ()=>{
   if(!calidadData.length){ toast('No hay datos para exportar','error'); return; }
-  exportCSV('calidad_devoluciones.csv', calidadData, [
+  exportExcel('calidad_devoluciones.xlsx', calidadData, [
     {label:'Fecha', get:r=>r._fecha?r._fecha.toISOString().slice(0,10):''},
     {label:'# Venta', get:r=>r.num_venta},
     {label:'Estado exacto', get:r=>r.estado_venta},
